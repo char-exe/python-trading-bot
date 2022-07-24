@@ -8,7 +8,7 @@ from price_action_data import client
 class TradeSignal:
     def __init__(self, df: pd.DataFrame):
         self.df = df
-        self.side = 'BUY'  # todo change back to None after debugging
+        self.side = None
 
         last_pa = df.iloc[-1]
         self.price = last_pa['close']
@@ -164,5 +164,14 @@ def execute_trade(user: User, side, quantity):
     )
 
 
-def save_trade_data(conn, trade, side, open_or_close, btc_bal, usdt_bal):
-    pass
+def save_trade_data(user, conn, trade, side, open_or_close, btc_bal, usdt_bal):
+    execute_query(conn, f"""
+            INSERT INTO
+              trades (trade_id, type, open_or_close, qty, price, btc_bal, usdt_bal, date)
+            VALUES
+              ('{trade['clientOrderId']}', '{t.side}', {open_or_close}, '{trade['executedQty']}',
+              '{trade['cummulativeQuoteQty']}', '{user.btc_bal}', '{user.usdt_bal}', '{trade['transactTime']}')
+        """)
+
+    user.set_btc_bal(float(client.get_asset_balance('BTC')['free']))
+    user.set_usdt_bal(float(client.get_asset_balance('USDT')['free']))

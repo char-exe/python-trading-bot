@@ -5,8 +5,8 @@ import binance
 
 from technical_indicators import *
 from price_action_data import SYS_ONLINE, get_minute_data, client, get_current_price
-from trade import Trade, TradeSignal
-from binance.enums import *
+from trade import Trade, TradeSignal, get_pos_size, execute_trade, save_trade_data
+# from binance.enums import *
 
 from db.db import *
 
@@ -93,17 +93,12 @@ def main():
 
     print(trade)
 
-    # print(client.get_all_orders(symbol=TICKER))
-
-    # add/remove balances
-    me.add_btc_bal(float(trade['executedQty']))
-    me.sub_usdt_bal(float(trade['cummulativeQuoteQty']))
-
     t_obj = Trade(
         trade['clientOrderId'], t.side, 'open', trade['executedQty'], trade['cummulativeQuoteQty'], me.btc_bal,
         me.usdt_bal, trade['transactTime']
     )
-
+    me.set_btc_bal(float(client.get_asset_balance('BTC')['free']))
+    me.set_usdt_bal(float(client.get_asset_balance('USDT')['free']))
     execute_query(CONN, f"""
         INSERT INTO
           trades (trade_id, type, open_or_close, qty, price, btc_bal, usdt_bal, date)
@@ -112,23 +107,52 @@ def main():
           '{trade['cummulativeQuoteQty']}', '{me.btc_bal}', '{me.usdt_bal}', '{trade['transactTime']}')
     """)
 
-    me.set_btc_bal(float(client.get_asset_balance('BTC')['free']))
-    me.set_usdt_bal(float(client.get_asset_balance('USDT')['free']))
+
     print()
     print('after trade')
     print(f'    ===BTC: {me.btc_bal}')
     print(f'    ==USDT: {me.usdt_bal}')
 
+def init_data():
+    pa = get_minute_data(TICKER)
+    pa = add_rsi_col(pa)
+    pa = add_ema_col(pa)
+    pa = add_macd_diff_col(pa)
+    return TradeSignal(pa)
+
+def init_user():
+    usr = User(client)
+    usr.set_btc_bal(float(client.get_asset_balance('BTC')['free']))
+    usr.set_usdt_bal(float(client.get_asset_balance('USDT')['free']))
+    return usr
 
 if __name__ == '__main__':
     if not SYS_ONLINE: raise Exception('Binance system is not operating normally')
+    me = init_user()
 
-    # while True:
-    #     now = dt.datetime.now().second
-    #     if now == 0:
-    #         print(f'price at: {(dt.datetime.now() - dt.timedelta(minutes=1)).strftime("%H:%M:%S")}')
-    #         main()
-    #         print()
-    main()
+    while True:
+        sec = dt.datetime.now().second
+        if sec == 0:
+            print(f'price at: {(dt.datetime.now() - dt.timedelta(minutes=1)).strftime("%H:%M:%S")}')
+            ts = init_data()
+            side = ts.validate_signal()
+            if side:
+                quant = get_pos_size(user=me, side=side, price=ts.price)
+                trade = execute_trade(user=me, side=side, quantity=quant)
+
+                me.set_btc_bal(float(client.get_asset_balance('BTC')['free']))
+                me.set_usdt_bal(float(client.get_asset_balance('USDT')['free']))
+
+                save_trade_data(me, CONN, trade, side, 'open', me.btc_bal, me.usdt_bal)
+
+                target_price = ts.price * me.tp_p
+                stop_loss = ts.price * me.sl_p
+                pos_open = True
+                while pos_open:
+                    price = float(get_current_price(TICKER))
+                    print(price)
+                    print(target_price)
+                    print()
+                    time.sleep(1)
 
         # test()
